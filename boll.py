@@ -3,6 +3,7 @@ import backtrader as bt
 from datetime import datetime
 import argparse
 import pandas as pd
+import csv
 
 
 def parse_args():
@@ -35,44 +36,56 @@ class BOLLStrat(bt.Strategy):
     '''
 
     params = (
-        ("period", 20),
-        ("devfactor", 2),
+        ("period", 100),
+        ("devfactor", 1.5),
         ("size", 20),
-        ("debug", False)
+        ("debug", False),
+        ("rsi_period",30),
+        ("lookback",7)
         )
 
     def __init__(self):
+        self.dataclose = self.datas[0].close
         self.boll = bt.indicators.BollingerBands(period=self.p.period, devfactor=self.p.devfactor)
-        #self.sx = bt.indicators.CrossDown(self.data.close, self.boll.lines.top)
-        #self.lx = bt.indicators.CrossUp(self.data.close, self.boll.lines.bot)
+        self.sx = bt.indicators.CrossDown(self.data.close, self.boll.lines.top)
+        self.lx = bt.indicators.CrossUp(self.data.close, self.boll.lines.bot)
+        self.order_price = 0
+        self.in_position = 0
+        self.rsi = bt.indicators.RSI(period=self.params.rsi_period, lookback=self.params.lookback)
 
     def next(self):
 
         orders = self.broker.get_orders_open()
 
         # Cancel open orders so we can track the median line
-        if orders:
-            for order in orders:
-                self.broker.cancel(order)
+        # if orders:
+        #     for order in orders:
+        #         self.broker.cancel(order)
 
-        if not self.position:
+        if not self.in_position:
 
-            if self.data.close > self.boll.lines.top:
+            if self.sx > 0 and self.in_position >= 1 and self.rsi > 80:
 
-                self.sell(exectype=bt.Order.Stop, price=self.boll.lines.top[0], size=self.p.size)
+                self.sell(exectype=bt.Order.Market, price=self.boll.lines.top[0])
+                self.in_position -= 1
 
-            if self.data.close < self.boll.lines.bot:
-                self.buy(exectype=bt.Order.Stop, price=self.boll.lines.bot[0], size=self.p.size)
+            if self.lx > 0 and self.rsi < 20:
+                self.buy(exectype=bt.Order.Market, price=self.boll.lines.bot[0])
+                self.in_position += 1
+                self.order_price = self.dataclose[0]
 
 
         else:
 
 
-            if self.position.size > 0:
-                self.sell(exectype=bt.Order.Limit, price=self.boll.lines.mid[0], size=self.p.size)
+            if self.in_position >= 1 and self.sx > 0 and self.rsi > 80:
+                self.sell(exectype=bt.Order.Limit, price=self.boll.lines.mid[0])
+                self.in_position -= 1
 
-            else:
-                self.buy(exectype=bt.Order.Limit, price=self.boll.lines.mid[0], size=self.p.size)
+            elif self.lx > 0 and self.rsi < 20:
+                self.buy(exectype=bt.Order.Limit, price=self.boll.lines.mid[0])
+                self.order_price = self.dataclose[0]
+                self.in_position += 1
 
         if self.p.debug:
             print('---------------------------- NEXT ----------------------------------')
@@ -111,7 +124,8 @@ cerebro = bt.Cerebro()
 cerebro.addstrategy(BOLLStrat)
 
 # Get a pandas dataframe
-datapath = ('/home/jon/Desktop/Backtester/history/AAVE-USD.csv')
+
+datapath = './history/ADA-USD.csv'
 # Simulate the header row if noheaders requested
 args = parse_args()
 skiprows = 1 if args.noheaders else 0
@@ -132,7 +146,7 @@ data = bt.feeds.PandasData(dataname=dataframe)
 cerebro.adddata(data)
 
 # Add a sizer
-cerebro.addsizer(bt.sizers.FixedReverser, stake=10)
+cerebro.addsizer(bt.sizers.PercentSizer, percents=.3)
 
 # Run over everything
 cerebro.run()
